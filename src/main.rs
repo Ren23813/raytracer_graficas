@@ -8,23 +8,51 @@ use std::f32::consts::PI;
 mod framebuffer;
 mod ray_intersect;
 mod sphere;
+mod material;
 
 use framebuffer::Framebuffer;
 use ray_intersect::RayIntersect;
+use ray_intersect::HitInfo;
 use sphere::Sphere;
+use material::Material;
 
 pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
     objects: &[Sphere],
 ) -> Color {
+    let mut closest_hit: Option<HitInfo> = None;
+
     for object in objects {
-        if object.ray_intersect(ray_origin, ray_direction) {
-            return Color::new(157, 165, 189, 255);
+        if let Some(hit) = object.ray_intersect(ray_origin, ray_direction) {
+            if closest_hit.is_none() || hit.distance < closest_hit.as_ref().unwrap().distance {
+                closest_hit = Some(hit);
+            }
         }
     }
+
+    if let Some(hit) = closest_hit {
+        // Dirección de la luz (de arriba a la derecha)
+        let light_dir = Vector3::new(-1.0, -1.0, -1.0).normalized();
+        let diffuse_intensity = hit.normal.dot(-light_dir).max(0.0); // clamp to [0, 1]
+
+        // Obtén el color difuso de la esfera que fue impactada
+        let base_color = hit.object.material.diffuse;  // Usa el color difuso de la esfera
+        let shaded = Vector3::new(base_color.r as f32, base_color.g as f32, base_color.b as f32) * diffuse_intensity;
+
+        return Color::new(
+            shaded.x as u8,
+            shaded.y as u8,
+            shaded.z as u8,
+            255,
+        );
+    }
+
+    // Fondo
     Color::new(4, 12, 36, 255)
 }
+
+
 
 pub fn render(framebuffer: &mut Framebuffer, objects: &[Sphere]) {
     let width = framebuffer.width as f32;
@@ -64,23 +92,41 @@ fn main() {
 
     let mut framebuffer = Framebuffer::new(window_width as i32, window_height as i32,Color::BLUE);
 
-    framebuffer.set_background_color(Color::new(80, 80, 200, 255));
+    framebuffer.set_background_color(Color::new(165, 221, 240, 255));
 
     let objects = [
-    // Cuerpo (esfera más grande, abajo)
+    
     Sphere {
         center: Vector3::new(0.0, -1.0, -5.0),
         radius: 1.0,
+        material: Material{diffuse:Color::SKYBLUE}
     },
-    // Pecho (esfera mediana, en el medio)
+    
     Sphere {
         center: Vector3::new(0.0, 0.3, -5.0),
         radius: 0.7,
+        material: Material{diffuse:Color::SKYBLUE}
     },
-    // Cabeza (esfera pequeña, arriba)
+
     Sphere {
         center: Vector3::new(0.0, 1.2, -5.0),
         radius: 0.4,
+        material: Material{diffuse:Color::SKYBLUE}
+    },
+    Sphere {
+        center: Vector3::new(-0.1, 1.1, -4.0),
+        radius: 0.05,
+        material: Material{diffuse:Color::BLACK}
+    },
+    Sphere {
+        center: Vector3::new(0.1, 1.1, -4.0),
+        radius: 0.05,
+        material: Material{diffuse:Color::BLACK}
+    },
+    Sphere {
+        center: Vector3::new(0.0, 1.0, -4.0),
+        radius: 0.05,
+        material: Material{diffuse:Color::ORANGE}
     },
     ];
 
