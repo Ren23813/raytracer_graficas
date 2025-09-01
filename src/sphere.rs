@@ -1,7 +1,6 @@
 use raylib::prelude::*;
 use crate::ray_intersect::{RayIntersect, HitInfo};
 use crate::material::Material;
-use std::f32;
 
 pub struct Sphere {
     pub center: Vector3,
@@ -32,15 +31,12 @@ impl RayIntersect for Sphere {
         let hit_point = *ray_origin + *ray_direction * t;
         let normal = (hit_point - self.center).normalized();
 
-        // Devolvemos la referencia al objeto (`self`)
         Some(HitInfo {
             hit: true,
             point: hit_point,
             normal,
             distance: t,
-            object: self,  // Pasamos la referencia al objeto
+            material: self.material,
         })
     }
 }
-
-

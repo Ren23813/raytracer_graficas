@@ -1,13 +1,12 @@
 use raylib::prelude::*;
+use crate::material::Material;
 
-use crate::sphere::Sphere;
-
-pub struct HitInfo<'a> {
+pub struct HitInfo {
     pub hit: bool,
     pub point: Vector3,
     pub normal: Vector3,
     pub distance: f32,
-    pub object: &'a Sphere,  // Aquí agregamos la referencia al objeto
+    pub material: Material,
 }
 
 pub trait RayIntersect {
