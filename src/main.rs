@@ -10,18 +10,25 @@ mod ray_intersect;
 mod cube;
 mod material;
 mod camera;
+mod light;
 
 use framebuffer::Framebuffer;
 use ray_intersect::{RayIntersect, HitInfo};
 use cube::Cube;
 use material::Material;
 use camera::Camera;
+use light::Light;
 
 // Util para comprobar si hay cualquier intersección entre origin y origin + dir*max_dist
-fn intersects_any(origin: &Vector3, direction: &Vector3, objects: &[&dyn RayIntersect], max_dist: f32) -> bool {
+fn intersects_any(
+    origin: &Vector3,
+    direction: &Vector3,
+    objects: &[&dyn RayIntersect],
+    max_dist: f32,
+) -> bool {
     for obj in objects {
         if let Some(hit) = obj.ray_intersect(origin, direction) {
-            if hit.distance > 1e-4 && hit.distance < max_dist {
+            if hit.distance < max_dist {
                 return true;
             }
         }
@@ -29,16 +36,64 @@ fn intersects_any(origin: &Vector3, direction: &Vector3, objects: &[&dyn RayInte
     false
 }
 
-fn reflect(v: Vector3, n: Vector3) -> Vector3 {
-    // reflect v around n: v - 2*(v·n)*n
-    v - n * (2.0 * v.dot(n))
+fn reflect(i: &Vector3, n: &Vector3) -> Vector3 {
+    *i - *n * 2.0 * i.dot(*n)
 }
+
+pub fn refract(incident: &Vector3, normal: &Vector3, refractive_index: f32) -> Vector3 {
+    // Implementation of Snell's Law for refraction.
+    // It calculates the direction of a ray as it passes from one medium to another.
+
+    // `cosi` is the cosine of the angle between the incident ray and the normal.
+    // We clamp it to the [-1, 1] range to avoid floating point errors.
+    let mut cosi = incident.dot(*normal).max(-1.0).min(1.0);
+
+    // `etai` is the refractive index of the medium the ray is currently in.
+    // `etat` is the refractive index of the medium the ray is entering.
+    // `n` is the normal vector, which may be flipped depending on the ray's direction.
+    let mut etai = 1.0; // Assume we are in Air (or vacuum) initially
+    let mut etat = refractive_index;
+    let mut n = *normal;
+
+    if cosi > 0.0 {
+        // The ray is inside the medium (e.g., glass) and going out into the air.
+        // We need to swap the refractive indices.
+        std::mem::swap(&mut etai, &mut etat);
+        // We also flip the normal so it points away from the medium.
+        n = -n;
+    } else {
+        // The ray is outside the medium and going in.
+        // We need a positive cosine for the calculation, so we negate it.
+        cosi = -cosi;
+    }
+
+    // `eta` is the ratio of the refractive indices (n1 / n2).
+    let eta = etai / etat;
+    // `k` is a term derived from Snell's law that helps determine if total internal reflection occurs.
+    let k = 1.0 - eta * eta * (1.0 - cosi * cosi);
+
+    if k < 0.0 {
+        // If k is negative, it means total internal reflection has occurred.
+        // There is no refracted ray, so we return None.
+        Vector3::zero()
+    } else {
+        // If k is non-negative, we can calculate the direction of the refracted ray.
+        *incident * eta + n * (eta * cosi - k.sqrt())
+    }
+}
+
 
 pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
     objects: &[&dyn RayIntersect],
-) -> Color {
+    light: &Light,
+    depth: u32,
+) -> Vector3 {
+    if depth > 3 {
+        return Vector3::new(0.1, 0.1, 0.2); // cielo / skybox
+    }
+
     let mut closest_hit: Option<HitInfo> = None;
 
     for object in objects {
@@ -50,64 +105,97 @@ pub fn cast_ray(
     }
 
     if let Some(hit) = closest_hit {
-        // Luz puntual
-        let light_pos = Vector3::new(2.0, 4.0, -2.0); // juega con esta posición
-        let light_color = Vector3::new(1.0, 1.0, 1.0);
+        let light_dir = (light.position - hit.point).normalized();
+        let view_dir = (*ray_origin - hit.point).normalized();
+        let reflect_dir = reflect(&-light_dir, &-hit.normal).normalized();
+        let m = hit.material;
 
-        let to_light_vec = (light_pos - hit.point);
-        let light_distance = to_light_vec.length();
-        let dir_to_light = to_light_vec.normalized();
-
-        // Ambient + Diffuse + Specular (Phong)
-        let ambient = 0.12_f32;
-        let diff = hit.normal.dot(dir_to_light).max(0.0);
-
-        // Sombras: si hay algo entre el punto y la luz (dist < light_distance) -> en sombra
+        // Sombra
         let shadow_origin = hit.point + hit.normal * 1e-3;
-        let in_shadow = intersects_any(&shadow_origin, &dir_to_light, objects, light_distance - 1e-3);
-        let shadow_factor = if in_shadow { 0.2 } else { 1.0 };
+        let in_shadow = intersects_any(&shadow_origin, &light_dir, objects, (light.position - hit.point).length() - 1e-3);
+        let shadow_intensity = if in_shadow { 0.8 } else { 0.0 };
+        let light_intensity = light.intensity * (1.0 - shadow_intensity);
 
-        // Specular
-        let view_dir = (-*ray_direction).normalized(); // dirección hacia la cámara
-        let reflect_dir = reflect(-dir_to_light, hit.normal).normalized();
-        let specular_strength = 0.6_f32;
-        let shininess = 64.0_f32;
-        let spec_angle = view_dir.dot(reflect_dir).max(0.0);
-        let specular = specular_strength * spec_angle.powf(shininess);
-
-        // Atenuación por distancia (opcional, para dar sensación 3D)
-        let attenuation = 1.0 / (1.0 + 0.09 * light_distance + 0.032 * light_distance * light_distance);
-
-        let base = Vector3::new(
-            hit.material.diffuse.r as f32 / 255.0,
-            hit.material.diffuse.g as f32 / 255.0,
-            hit.material.diffuse.b as f32 / 255.0,
+        // Convertir Color (u8) a Vector3 (0..1)
+        let base_color = Vector3::new(
+            m.diffuse.r as f32 / 255.0,
+            m.diffuse.g as f32 / 255.0,
+            m.diffuse.b as f32 / 255.0,
         );
 
-        // Composición final
-        let light_contrib = ambient + (1.0 - ambient) * diff * attenuation;
-        let final_col = base * (light_contrib * shadow_factor) + light_color * (specular * shadow_factor * attenuation);
+        let diffuse_intensity = hit.normal.dot(light_dir).max(0.0) * light_intensity;
+        let diffuse = base_color * diffuse_intensity;
 
-        Color::new(
-            (final_col.x.clamp(0.0, 1.0) * 255.0) as u8,
-            (final_col.y.clamp(0.0, 1.0) * 255.0) as u8,
-            (final_col.z.clamp(0.0, 1.0) * 255.0) as u8,
-            255,
-        )
+        let specular_intensity = view_dir.dot(reflect_dir).max(0.0).powf(m.specular) * light_intensity;
+        let specular = light.color * specular_intensity;
+
+        // Reflection
+        let mut reflection_color = Vector3::new(0.1, 0.1, 0.2); // skybox color
+        if m.reflectivity > 0.0 {
+            let reflect_dir = reflect(ray_direction, &hit.normal).normalized();
+            let reflect_origin = hit.point + hit.normal * 1e-3;
+            reflection_color = cast_ray(&reflect_origin, &reflect_dir, objects, light, depth + 1);
+        }
+
+        // Refraction
+        let mut refraction_color = Vector3::zero();
+        if m.transparency > 0.0 {
+            let refract_dir = refract(ray_direction, &hit.normal, m.refractive_index).normalized();
+            let refract_origin = hit.point - hit.normal * 1e-3;
+            refraction_color = cast_ray(&refract_origin, &refract_dir, objects, light, depth + 1);
+        }
+
+        // Composición final
+        let color = diffuse * m.albedo[0]
+            + specular * m.albedo[1]
+            + reflection_color * m.reflectivity
+            + refraction_color * m.transparency;
+
+        color
     } else {
-        // Fondo
-        Color::new(30, 30, 60, 255)
+        procedural_sky(*ray_direction)
+    }
+}
+
+
+fn procedural_sky(dir: Vector3) -> Vector3 {
+    let d = dir.normalized();
+    let t = (d.y + 1.0) * 0.5; // map y [-1,1] → [0,1]
+
+    let green = Vector3::new(0.1, 0.6, 0.2); // grass green
+    let white = Vector3::new(1.0, 1.0, 1.0); // horizon haze
+    let blue = Vector3::new(0.3, 0.5, 1.0);  // sky blue
+
+    if t < 0.54 {
+        // Bottom → fade green to white
+        let k = t / 0.55;
+        green * (1.0 - k) + white * k
+    } else if t < 0.55 {
+        // Around horizon → mostly white
+        white
+    } else if t < 0.8 {
+        // Fade white to blue
+        let k = (t - 0.55) / (0.25);
+        white * (1.0 - k) + blue * k
+    } else {
+        // Upper sky → solid blue
+        blue
     }
 }
 
 // pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect]) {
-
 pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect], camera: &Camera) {
     let width = framebuffer.width as f32;
     let height = framebuffer.height as f32;
     let aspect_ratio = width / height;
     let fov = PI / 3.0;
     let perspective_scale = (fov * 0.5).tan();
+
+    let light = Light {
+                position: Vector3::new(2.0, 4.0, -2.0),
+                color: Vector3::new(1.0, 1.0, 1.0),
+                intensity: 1.0,
+            };
 
     for y in 0..framebuffer.height {
         for x in 0..framebuffer.width {
@@ -118,11 +206,15 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect], came
             let screen_y = screen_y * perspective_scale;
 
             let ray_direction = Vector3::new(screen_x, screen_y, -1.0).normalized();
-
             let rotated_direction = camera.basis_change(&ray_direction);
 
-            let pixel_color = cast_ray(&camera.eye, &rotated_direction, objects);
-
+            let ray_color = cast_ray(&camera.eye, &rotated_direction, objects, &light, 0);
+            let pixel_color = Color::new(
+                (ray_color.x.clamp(0.0, 1.0) * 255.0) as u8,
+                (ray_color.y.clamp(0.0, 1.0) * 255.0) as u8,
+                (ray_color.z.clamp(0.0, 1.0) * 255.0) as u8,
+                255,
+            );
             framebuffer.set_current_color(pixel_color);
             framebuffer.set_pixel(x, y);
         }
@@ -140,28 +232,62 @@ fn main() {
         .build();
 
     let mut framebuffer = Framebuffer::new(window_width as i32, window_height as i32, Color::BLACK);
-    framebuffer.set_background_color(Color::new(20, 26, 40, 255));
+    framebuffer.set_background_color(Color::new(201, 201, 201, 255));
 
-    // SOLO el cubo (sin esferas)
-     let cube = Cube {
+    let purple_matte = Material {
+        diffuse: Color::new(160, 110, 230, 255),
+        specular: 32.0,
+        reflectivity: 0.1,
+        transparency: 0.0,
+        refractive_index: 1.0,
+        albedo: [0.8, 0.2],
+    };
+
+    let mirror = Material {
+        diffuse: Color::WHITE,
+        specular: 1000.0,
+        reflectivity: 1.0,
+        transparency: 0.0,
+        refractive_index: 1.0,
+        albedo: [0.0, 1.0],
+    };
+
+    let glass = Material {
+        diffuse: Color::WHITE,
+        specular: 125.0,
+        reflectivity: 0.1,
+        transparency: 0.9,
+        refractive_index: 1.5,
+        albedo: [0.1, 0.9],
+    };
+
+
+    let cube = Cube {
         center: Vector3::new(1.0, 0.0, -4.0),
         half_size: Vector3::new(1.0, 1.0, 1.0),
-        // rotaciones en radianes (ej: 20° en X, -30° en Y)
         rot_x: 20f32.to_radians(),
         rot_y: (-30f32).to_radians(),
-        material: Material { diffuse: Color::new(160, 110, 230, 255) },
+        material: purple_matte,
     };
     
     let cube2 = Cube {
-        center: Vector3::new(2.0, 0.0, -5.0),
+        center: Vector3::new(2.0, -3.0, -5.0),
         half_size: Vector3::new(1.0, 1.0, 1.0),
-        // rotaciones en radianes (ej: 20° en X, -30° en Y)
         rot_x: 20f32.to_radians(),
         rot_y: (-30f32).to_radians(),
-        material: Material { diffuse: Color::new(160, 110, 230, 255) },
+        material: glass,
     };
 
-    let objects_vec: Vec<&dyn RayIntersect> = vec![&cube,&cube2];
+    let cube3 = Cube {
+        center: Vector3::new(5.0, 2.0, -5.0),
+        half_size: Vector3::new(1.0, 1.0, 1.0),
+        rot_x: 20f32.to_radians(),
+        rot_y: (-30f32).to_radians(),
+        material: mirror,
+    };
+
+
+    let objects_vec: Vec<&dyn RayIntersect> = vec![&cube,&cube2,&cube3];
     let objects_slice: &[&dyn RayIntersect] = &objects_vec;
 
      let mut camera = Camera::new(
@@ -169,7 +295,7 @@ fn main() {
         Vector3::new(0.0, 0.0, 0.0),  // center
         Vector3::new(0.0, 1.0, 0.0),  // up
     );
-    let rotation_speed = PI / 100.0;
+    let rotation_speed = PI / 50.0;
 
     while !window.window_should_close() {
         framebuffer.clear();
