@@ -50,11 +50,14 @@ impl Framebuffer {
         Image::export_image(&self.color_buffer, file_path);
     }
 
-    pub fn swap_buffers(&self, window: &mut RaylibHandle, raylib_thread: &RaylibThread,){
-        if let Ok(texture) = window.load_texture_from_image(raylib_thread, &self.color_buffer){
-            let mut renderer = window.begin_drawing(raylib_thread);
-            renderer.draw_texture(&texture,0,0,Color::WHITE);
-        }
+    pub fn swap_buffers(&self, window: &mut RaylibHandle, raylib_thread: &RaylibThread) {
+        let texture = window
+            .load_texture_from_image(raylib_thread, &self.color_buffer)
+            .unwrap_or_else(|e| panic!("Failed to create texture from framebuffer: {}", e));
+
+        let mut d = window.begin_drawing(raylib_thread);
+        d.draw_texture(&texture, 0, 0, Color::WHITE);
+
     }
 
     pub fn get_pixel_color(&self, x: i32, y: i32) -> Option<Color> {

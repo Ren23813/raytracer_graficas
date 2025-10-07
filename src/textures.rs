@@ -1,17 +1,17 @@
-
 use raylib::prelude::*;
 use std::collections::HashMap;
 
-struct CpuTexture {
-    width: i32,
-    height: i32,
-    pixels: Vec<Vector3>, // Normalized RGB values
+pub struct CpuTexture {
+    pub width: i32,
+    pub height: i32,
+    pub pixels: Vec<Vector3>, // Normalized RGB values
 }
 
 impl CpuTexture {
-    fn from_image(image: &Image) -> Self {
-        // Safe: Raylib handles pixel format internally
-        let colors = image.get_image_data(); // Vec<Color>
+    pub fn from_image(image: &Image) -> Self {
+        // cuidado con la API exacta de raylib-rs: aquí asumimos que
+        // image.get_image_data() -> Vec<Color> (o ajusta según tu versión)
+        let colors = image.get_image_data();
         let pixels = colors
             .iter()
             .map(|c| {
@@ -33,13 +33,11 @@ impl CpuTexture {
 
 pub struct TextureManager {
     cpu_textures: HashMap<String, CpuTexture>,
-    textures: HashMap<String, Texture2D>, // Store GPU textures for rendering
+    textures: HashMap<String, Texture2D>, // GPU textures para rendering
 }
 
 impl TextureManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
     pub fn load_texture(
         &mut self,
@@ -51,12 +49,14 @@ impl TextureManager {
             return;
         }
 
+        // Ajusta según la API de tu versión de raylib-rs si load_image devuelve Result
         let image = Image::load_image(path)
             .unwrap_or_else(|_| panic!("Failed to load image {}", path));
 
         let texture = rl
             .load_texture_from_image(thread, &image)
             .unwrap_or_else(|_| panic!("Failed to load texture {}", path));
+            // si tu API devuelve Result: .unwrap_or_else(...)
 
         let cpu_texture = CpuTexture::from_image(&image);
 
@@ -64,21 +64,14 @@ impl TextureManager {
         self.textures.insert(path.to_string(), texture);
     }
 
-    pub fn get_pixel_color(
-        &self,
-        path: &str,
-        tx: u32,
-        ty: u32,
-    ) -> Vector3 {
+    /// Muestra un texel dado (u,v) en [0,1]
+    pub fn sample_uv(&self, path: &str, u: f32, v: f32) -> Vector3 {
         if let Some(cpu_texture) = self.cpu_textures.get(path) {
-            let x = tx.min(cpu_texture.width as u32 - 1) as i32;
-            let y = ty.min(cpu_texture.height as u32 - 1) as i32;
-
-            if x < 0 || y < 0 || x >= cpu_texture.width || y >= cpu_texture.height {
-                return Vector3::one(); // default white
-            }
-
-            let index = (y * cpu_texture.width + x) as usize;
+            // mapear u,v en [0,1] a coordenadas de pixel
+            let tx = (u * (cpu_texture.width as f32 - 1.0)).clamp(0.0, cpu_texture.width as f32 - 1.0) as i32;
+            // v típicamente viene con origen en bottom o top; aquí asumimos v=0→bottom. Si tu atlas está invertido, cambia a (1.0-v).
+            let ty = ((1.0 - v) * (cpu_texture.height as f32 - 1.0)).clamp(0.0, cpu_texture.height as f32 - 1.0) as i32;
+            let index = (ty * cpu_texture.width + tx) as usize;
             if index < cpu_texture.pixels.len() {
                 cpu_texture.pixels[index]
             } else {
@@ -89,43 +82,11 @@ impl TextureManager {
         }
     }
 
-    pub fn get_texture(
-        &self,
-        path: &str,
-    ) -> Option<&Texture2D> {
+    pub fn get_texture(&self, path: &str) -> Option<&Texture2D> {
         self.textures.get(path)
     }
 
-    pub fn get_normal_from_map(
-        &self,
-        path: &str,
-        tx: u32,
-        ty: u32,
-    ) -> Option<Vector3> {
-        if let Some(cpu_texture) = self.cpu_textures.get(path) {
-            let x = tx.min(cpu_texture.width as u32 - 1) as i32;
-            let y = ty.min(cpu_texture.height as u32 - 1) as i32;
-
-            if x < 0 || y < 0 || x >= cpu_texture.width || y >= cpu_texture.height {
-                return None;
-            }
-
-            let index = (y * cpu_texture.width + x) as usize;
-            if index < cpu_texture.pixels.len() {
-                let color = cpu_texture.pixels[index];
-                let normal = Vector3::new(
-                    color.x * 2.0 - 1.0,
-                    color.y * 2.0 - 1.0,
-                    color.z,
-                );
-                Some(normal.normalized())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
+    // mantiene default impl como antes
 }
 
 impl Default for TextureManager {

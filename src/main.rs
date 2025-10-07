@@ -11,6 +11,7 @@ mod cube;
 mod material;
 mod camera;
 mod light;
+mod textures;
 
 use framebuffer::Framebuffer;
 use ray_intersect::{RayIntersect, HitInfo};
@@ -18,6 +19,7 @@ use cube::Cube;
 use material::Material;
 use camera::Camera;
 use light::Light;
+use textures::TextureManager;
 
 // Util para comprobar si hay cualquier intersección entre origin y origin + dir*max_dist
 fn intersects_any(
@@ -83,19 +85,54 @@ pub fn refract(incident: &Vector3, normal: &Vector3, refractive_index: f32) -> V
 }
 
 
+
+fn get_cube_uv(hit_point: Vector3, normal: Vector3) -> (f32, f32) {
+    let (u, v) = if normal.x.abs() > 0.5 {
+        // Cara derecha o izquierda
+        ((hit_point.z + 0.5), (hit_point.y + 0.5))
+    } else if normal.y.abs() > 0.5 {
+        // Cara superior o inferior
+        ((hit_point.x + 0.5), (hit_point.z + 0.5))
+    } else {
+        // Cara delantera o trasera
+        ((hit_point.x + 0.5), (hit_point.y + 0.5))
+    };
+
+    (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0))
+}
+
+fn map_uv_for_cube(hit_point: &Vector3, normal: &Vector3) -> Option<(f32, f32)> {
+    // Asume cubo centrado en origen y de tamaño 2 (half_size = 1)
+    let p = *hit_point;
+    let (u, v) = if normal.x.abs() > 0.9 {
+        ((p.z + 1.0) * 0.5, (p.y + 1.0) * 0.5)
+    } else if normal.y.abs() > 0.9 {
+        ((p.x + 1.0) * 0.5, (p.z + 1.0) * 0.5)
+    } else if normal.z.abs() > 0.9 {
+        ((p.x + 1.0) * 0.5, (p.y + 1.0) * 0.5)
+    } else {
+        return None;
+    };
+
+    Some((u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)))
+}
+
+
+
+// firma actualizada: ahora recibe texture_manager: &TextureManager
 pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
     objects: &[&dyn RayIntersect],
     light: &Light,
     depth: u32,
+    texture_manager: &TextureManager,
 ) -> Vector3 {
     if depth > 3 {
-        return Vector3::new(0.1, 0.1, 0.2); // cielo / skybox
+        return Vector3::new(0.1, 0.1, 0.2); // sky
     }
 
     let mut closest_hit: Option<HitInfo> = None;
-
     for object in objects {
         if let Some(hit) = object.ray_intersect(ray_origin, ray_direction) {
             if closest_hit.is_none() || hit.distance < closest_hit.as_ref().unwrap().distance {
@@ -107,45 +144,53 @@ pub fn cast_ray(
     if let Some(hit) = closest_hit {
         let light_dir = (light.position - hit.point).normalized();
         let view_dir = (*ray_origin - hit.point).normalized();
-        let reflect_dir = reflect(&-light_dir, &-hit.normal).normalized();
         let m = hit.material;
 
-        // Sombra
-        let shadow_origin = hit.point + hit.normal * 1e-3;
+        // sombra
+        let shadow_origin: Vector3 = hit.point + hit.normal * 1e-3;
         let in_shadow = intersects_any(&shadow_origin, &light_dir, objects, (light.position - hit.point).length() - 1e-3);
         let shadow_intensity = if in_shadow { 0.8 } else { 0.0 };
         let light_intensity = light.intensity * (1.0 - shadow_intensity);
 
-        // Convertir Color (u8) a Vector3 (0..1)
-        let base_color = Vector3::new(
+        // color base desde material
+        let mut base_color = Vector3::new(
             m.diffuse.r as f32 / 255.0,
             m.diffuse.g as f32 / 255.0,
             m.diffuse.b as f32 / 255.0,
         );
 
+        // Si hay textura, usamos UV local (si existe) y sampleamos con texture_manager.sample_uv
+        if let Some(texture_path) = &m.texture_path {
+            // asumimos cubo -> mapear con las coordenadas locales del hit
+            if let Some((u, v)) = map_uv_for_cube(&hit.local_point, &hit.local_normal) {
+                base_color = texture_manager.sample_uv(texture_path, u, v);
+            }
+        }
+
         let diffuse_intensity = hit.normal.dot(light_dir).max(0.0) * light_intensity;
         let diffuse = base_color * diffuse_intensity;
 
+        // specular con la luz
+        let reflect_dir = reflect(&-light_dir, &-hit.normal).normalized();
         let specular_intensity = view_dir.dot(reflect_dir).max(0.0).powf(m.specular) * light_intensity;
         let specular = light.color * specular_intensity;
 
         // Reflection
-        let mut reflection_color = Vector3::new(0.1, 0.1, 0.2); // skybox color
+        let mut reflection_color = Vector3::new(0.1, 0.1, 0.2);
         if m.reflectivity > 0.0 {
-            let reflect_dir = reflect(ray_direction, &hit.normal).normalized();
-            let reflect_origin = hit.point + hit.normal * 1e-3;
-            reflection_color = cast_ray(&reflect_origin, &reflect_dir, objects, light, depth + 1);
+            let rdir = reflect(ray_direction, &hit.normal).normalized();
+            let rorigin = hit.point + hit.normal * 1e-3;
+            reflection_color = cast_ray(&rorigin, &rdir, objects, light, depth + 1, texture_manager);
         }
 
         // Refraction
         let mut refraction_color = Vector3::zero();
         if m.transparency > 0.0 {
-            let refract_dir = refract(ray_direction, &hit.normal, m.refractive_index).normalized();
-            let refract_origin = hit.point - hit.normal * 1e-3;
-            refraction_color = cast_ray(&refract_origin, &refract_dir, objects, light, depth + 1);
+            let refr = refract(ray_direction, &hit.normal, m.refractive_index).normalized();
+            let rorigin = hit.point - hit.normal * 1e-3;
+            refraction_color = cast_ray(&rorigin, &refr, objects, light, depth + 1, texture_manager);
         }
 
-        // Composición final
         let color = diffuse * m.albedo[0]
             + specular * m.albedo[1]
             + reflection_color * m.reflectivity
@@ -156,6 +201,7 @@ pub fn cast_ray(
         procedural_sky(*ray_direction)
     }
 }
+
 
 
 fn procedural_sky(dir: Vector3) -> Vector3 {
@@ -184,7 +230,7 @@ fn procedural_sky(dir: Vector3) -> Vector3 {
 }
 
 // pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect]) {
-pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect], camera: &Camera) {
+pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect], camera: &Camera, texture_manager: &TextureManager) {
     let width = framebuffer.width as f32;
     let height = framebuffer.height as f32;
     let aspect_ratio = width / height;
@@ -208,7 +254,7 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect], came
             let ray_direction = Vector3::new(screen_x, screen_y, -1.0).normalized();
             let rotated_direction = camera.basis_change(&ray_direction);
 
-            let ray_color = cast_ray(&camera.eye, &rotated_direction, objects, &light, 0);
+            let ray_color = cast_ray(&camera.eye, &rotated_direction, objects, &light, 0, texture_manager);
             let pixel_color = Color::new(
                 (ray_color.x.clamp(0.0, 1.0) * 255.0) as u8,
                 (ray_color.y.clamp(0.0, 1.0) * 255.0) as u8,
@@ -234,6 +280,10 @@ fn main() {
     let mut framebuffer = Framebuffer::new(window_width as i32, window_height as i32, Color::BLACK);
     framebuffer.set_background_color(Color::new(201, 201, 201, 255));
 
+    let mut texture_manager = TextureManager::new();
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/brick.png");
+
+
     let purple_matte = Material {
         diffuse: Color::new(160, 110, 230, 255),
         specular: 32.0,
@@ -241,6 +291,7 @@ fn main() {
         transparency: 0.0,
         refractive_index: 1.0,
         albedo: [0.8, 0.2],
+        texture_path: Some("assets/brick.png".to_string())
     };
 
     let mirror = Material {
@@ -250,6 +301,7 @@ fn main() {
         transparency: 0.0,
         refractive_index: 1.0,
         albedo: [0.0, 1.0],
+        texture_path: Some("algo".to_string())
     };
 
     let glass = Material {
@@ -259,6 +311,7 @@ fn main() {
         transparency: 0.9,
         refractive_index: 1.5,
         albedo: [0.1, 0.9],
+        texture_path: Some("algo".to_string())
     };
 
 
@@ -313,7 +366,7 @@ fn main() {
             camera.orbit(0.0, rotation_speed);
         }
 
-        render(&mut framebuffer, objects_slice, &camera);
+        render(&mut framebuffer, objects_slice, &camera, &texture_manager);
 
         framebuffer.swap_buffers(&mut window, &raylib_thread);
     }

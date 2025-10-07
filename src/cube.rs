@@ -125,12 +125,17 @@ impl RayIntersect for Cube {
         // Normales rotan con la rotación forward (rotación sin translación)
         let world_normal = self.rotate_forward(local_normal).normalized();
 
-        Some(HitInfo {
-            hit: true,
-            point: world_point,
-            normal: world_normal,
-            distance: t, // la rotación no escala, así que t local == t mundo
-            material: self.material,
-        })
+       Some(HitInfo {
+                hit: true,
+                point: world_point,
+                local_point: local_hit,            // punto en espacio local del cubo
+                normal: world_normal,
+                local_normal,                      // normal en espacio local
+                distance: t,
+                material: self.material.clone(),
+            })
     }
+
+    
 }
+

@@ -34,9 +34,11 @@ impl RayIntersect for Sphere {
         Some(HitInfo {
             hit: true,
             point: hit_point,
+            local_point: hit_point,       // para esfera no necesitamos distinto local
             normal,
+            local_normal: normal,
             distance: t,
-            material: self.material,
+            material: self.material.clone(), // <- clone para no mover desde &self
         })
     }
 }

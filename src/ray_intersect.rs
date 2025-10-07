@@ -3,8 +3,10 @@ use crate::material::Material;
 
 pub struct HitInfo {
     pub hit: bool,
-    pub point: Vector3,
-    pub normal: Vector3,
+    pub point: Vector3,        // punto en espacio mundo
+    pub local_point: Vector3,  // punto en espacio local del objeto (útil para UVs)
+    pub normal: Vector3,       // normal en espacio mundo
+    pub local_normal: Vector3, // normal en espacio local (útil para decidir cara)
     pub distance: f32,
     pub material: Material,
 }
