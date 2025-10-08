@@ -301,6 +301,8 @@ fn main() {
 
     let mut texture_manager = TextureManager::new();
     texture_manager.load_texture(&mut window, &raylib_thread, "assets/brick.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/blackstone.png");
+
 
 
     let purple_matte = Material {
@@ -312,6 +314,17 @@ fn main() {
         albedo: [0.8, 0.2],
         texture_path: Some("assets/brick.png".to_string())
     };
+
+    let blackstone = Material {
+        diffuse: Color::new(160, 110, 230, 255),
+        specular: 32.0,
+        reflectivity: 0.1,
+        transparency: 0.0,
+        refractive_index: 1.0,
+        albedo: [0.8, 0.2],
+        texture_path: Some("assets/blackstone.png".to_string())
+    };
+
 
     let mirror = Material {
         diffuse: Color::WHITE,
@@ -358,8 +371,15 @@ fn main() {
         mirror,
     );
 
+    let cube4 = Cube::new(
+        Vector3::new(2.5, 7.0, -5.0),
+        Vector3::new(5.0, 1.0, 5.0),
+        20f32.to_radians(),
+        (-30f32).to_radians(),
+        blackstone,
+    );
 
-    let objects_vec: Vec<&dyn RayIntersect> = vec![&cube,&cube2,&cube3];
+    let objects_vec: Vec<&dyn RayIntersect> = vec![&cube,&cube2,&cube3,&cube4];
     let objects_slice: &[&dyn RayIntersect] = &objects_vec;
 
      let mut camera = Camera::new(
