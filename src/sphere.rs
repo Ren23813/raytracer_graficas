@@ -34,11 +34,13 @@ impl RayIntersect for Sphere {
         Some(HitInfo {
             hit: true,
             point: hit_point,
-            local_point: hit_point,       // para esfera no necesitamos distinto local
+            local_point: hit_point - self.center, // local respecto al centro
+            local_half_size: Vector3::new(self.radius, self.radius, self.radius), // aproximación
             normal,
             local_normal: normal,
             distance: t,
-            material: self.material.clone(), // <- clone para no mover desde &self
+            material: self.material.clone(),
+            texture_repeat: Vector2::new(1.0, 1.0),
         })
     }
 }

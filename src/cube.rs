@@ -11,9 +11,31 @@ pub struct Cube {
     pub rot_x: f32,
     pub rot_y: f32,
     pub material: Material,
+    pub texture_repeat: Vector2,
 }
 
 impl Cube {
+    pub fn new(center: Vector3, half_size: Vector3, rot_x: f32, rot_y: f32, material: Material) -> Self {
+        // Factor base: decide cuántas repeticiones por unidad de tamaño
+        // Por ejemplo, 1.0 -> una repetición por unidad; 2.0 -> 2 repeticiones por unidad
+        let base_repeat_factor = 1.0;
+
+        // usamos tamaño total (2 * half_size) para calcular repeticiones
+        let texture_repeat = Vector2::new(
+            (half_size.x * 2.0 * base_repeat_factor).max(1.0),
+            (half_size.y * 2.0 * base_repeat_factor).max(1.0),
+        );
+
+        Cube {
+            center,
+            half_size,
+            rot_x,
+            rot_y,
+            material,
+            texture_repeat,
+        }
+    }
+
     // rota vector por X
     fn rotate_x(v: Vector3, angle: f32) -> Vector3 {
         let (s, c) = angle.sin_cos();
@@ -126,16 +148,15 @@ impl RayIntersect for Cube {
         let world_normal = self.rotate_forward(local_normal).normalized();
 
        Some(HitInfo {
-                hit: true,
-                point: world_point,
-                local_point: local_hit,            // punto en espacio local del cubo
-                normal: world_normal,
-                local_normal,                      // normal en espacio local
-                distance: t,
-                material: self.material.clone(),
-            })
+            hit: true,
+            point: world_point,
+            local_point: local_hit,            // punto en espacio local del cubo
+            local_half_size: self.half_size,   // <-- nuevo
+            normal: world_normal,
+            local_normal,                      // normal en espacio local
+            distance: t,
+            material: self.material.clone(),
+            texture_repeat: self.texture_repeat,
+        })
     }
-
-    
 }
-

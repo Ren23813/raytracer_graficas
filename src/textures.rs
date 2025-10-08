@@ -64,13 +64,23 @@ impl TextureManager {
         self.textures.insert(path.to_string(), texture);
     }
 
-    /// Muestra un texel dado (u,v) en [0,1]
+    /// Muestra un texel dado (u,v). Aquí u,v pueden estar fuera de [0,1] — se envuelven (repeat).
     pub fn sample_uv(&self, path: &str, u: f32, v: f32) -> Vector3 {
         if let Some(cpu_texture) = self.cpu_textures.get(path) {
-            // mapear u,v en [0,1] a coordenadas de pixel
-            let tx = (u * (cpu_texture.width as f32 - 1.0)).clamp(0.0, cpu_texture.width as f32 - 1.0) as i32;
-            // v típicamente viene con origen en bottom o top; aquí asumimos v=0→bottom. Si tu atlas está invertido, cambia a (1.0-v).
-            let ty = ((1.0 - v) * (cpu_texture.height as f32 - 1.0)).clamp(0.0, cpu_texture.height as f32 - 1.0) as i32;
+            // wrap (repetir) coordenadas u,v incluso si están fuera de [0,1]
+            let mut u_wrapped = u - u.floor(); // fract, pero funciona con negativos
+            let mut v_wrapped = v - v.floor();
+            if u_wrapped < 0.0 { u_wrapped += 1.0; }
+            if v_wrapped < 0.0 { v_wrapped += 1.0; }
+
+            // convierte a índices de píxel usando floor
+            let fx = (u_wrapped * cpu_texture.width as f32).floor() as i32;
+            let fy = ((1.0 - v_wrapped) * cpu_texture.height as f32).floor() as i32; // invertir v si tu imagen tiene origen top-left
+
+            // rem_euclid para asegurar índice positivo dentro de rango
+            let tx = fx.rem_euclid(cpu_texture.width);
+            let ty = fy.rem_euclid(cpu_texture.height);
+
             let index = (ty * cpu_texture.width + tx) as usize;
             if index < cpu_texture.pixels.len() {
                 cpu_texture.pixels[index]
@@ -82,11 +92,10 @@ impl TextureManager {
         }
     }
 
+
     pub fn get_texture(&self, path: &str) -> Option<&Texture2D> {
         self.textures.get(path)
     }
-
-    // mantiene default impl como antes
 }
 
 impl Default for TextureManager {

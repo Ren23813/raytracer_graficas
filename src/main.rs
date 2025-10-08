@@ -101,21 +101,38 @@ fn get_cube_uv(hit_point: Vector3, normal: Vector3) -> (f32, f32) {
     (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0))
 }
 
-fn map_uv_for_cube(hit_point: &Vector3, normal: &Vector3) -> Option<(f32, f32)> {
-    // Asume cubo centrado en origen y de tamaño 2 (half_size = 1)
-    let p = *hit_point;
-    let (u, v) = if normal.x.abs() > 0.9 {
-        ((p.z + 1.0) * 0.5, (p.y + 1.0) * 0.5)
-    } else if normal.y.abs() > 0.9 {
-        ((p.x + 1.0) * 0.5, (p.z + 1.0) * 0.5)
-    } else if normal.z.abs() > 0.9 {
-        ((p.x + 1.0) * 0.5, (p.y + 1.0) * 0.5)
-    } else {
-        return None;
-    };
+fn map_uv_for_cube(local_point: &Vector3, local_normal: &Vector3, half_size: &Vector3) -> Option<(f32, f32)> {
+    // local_point está en coordenadas locales (ej: x in [-hx, +hx])
+    let p = *local_point;
+    let hx = half_size.x;
+    let hy = half_size.y;
+    let hz = half_size.z;
 
-    Some((u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)))
+    // evita dividir por cero
+    if hx.abs() < 1e-6 || hy.abs() < 1e-6 || hz.abs() < 1e-6 {
+        return None;
+    }
+
+    if local_normal.x.abs() > 0.9 {
+        // cara izquierda/derecha: u = z, v = y
+        let u = (p.z + hz) / (2.0 * hz); // map z from [-hz, hz] -> [0,1]
+        let v = (p.y + hy) / (2.0 * hy); // map y from [-hy, hy] -> [0,1]
+        Some((u, v))
+    } else if local_normal.y.abs() > 0.9 {
+        // cara top/bottom: u = x, v = z
+        let u = (p.x + hx) / (2.0 * hx);
+        let v = (p.z + hz) / (2.0 * hz);
+        Some((u, v))
+    } else if local_normal.z.abs() > 0.9 {
+        // cara front/back: u = x, v = y
+        let u = (p.x + hx) / (2.0 * hx);
+        let v = (p.y + hy) / (2.0 * hy);
+        Some((u, v))
+    } else {
+        None
+    }
 }
+
 
 
 
@@ -161,9 +178,11 @@ pub fn cast_ray(
 
         // Si hay textura, usamos UV local (si existe) y sampleamos con texture_manager.sample_uv
         if let Some(texture_path) = &m.texture_path {
-            // asumimos cubo -> mapear con las coordenadas locales del hit
-            if let Some((u, v)) = map_uv_for_cube(&hit.local_point, &hit.local_normal) {
-                base_color = texture_manager.sample_uv(texture_path, u, v);
+            if let Some((u_raw, v_raw)) = map_uv_for_cube(&hit.local_point, &hit.local_normal, &hit.local_half_size) {
+                // escalamos por la cantidad de repeticiones calculada para el objeto
+                let u_scaled = u_raw * hit.texture_repeat.x;
+                let v_scaled = v_raw * hit.texture_repeat.y;
+                base_color = texture_manager.sample_uv(texture_path, u_scaled, v_scaled);
             }
         }
 
@@ -315,29 +334,29 @@ fn main() {
     };
 
 
-    let cube = Cube {
-        center: Vector3::new(1.0, 0.0, -4.0),
-        half_size: Vector3::new(1.0, 1.0, 1.0),
-        rot_x: 20f32.to_radians(),
-        rot_y: (-30f32).to_radians(),
-        material: purple_matte,
-    };
+    let cube = Cube::new(
+        Vector3::new(1.0, 0.0, -4.0),
+        Vector3::new(1.0, 4.0, 1.0),
+        20f32.to_radians(),
+        (-30f32).to_radians(),
+        purple_matte,
+    );
     
-    let cube2 = Cube {
-        center: Vector3::new(2.0, -3.0, -5.0),
-        half_size: Vector3::new(1.0, 1.0, 1.0),
-        rot_x: 20f32.to_radians(),
-        rot_y: (-30f32).to_radians(),
-        material: glass,
-    };
+    let cube2 = Cube::new(
+        Vector3::new(2.0, -3.0, -5.0),
+        Vector3::new(1.0, 1.0, 1.0), // ejemplo: más alto
+        20f32.to_radians(),
+        (-30f32).to_radians(),
+        glass,
+    );
 
-    let cube3 = Cube {
-        center: Vector3::new(5.0, 2.0, -5.0),
-        half_size: Vector3::new(1.0, 1.0, 1.0),
-        rot_x: 20f32.to_radians(),
-        rot_y: (-30f32).to_radians(),
-        material: mirror,
-    };
+    let cube3 = Cube::new(
+        Vector3::new(5.0, 2.0, -5.0),
+        Vector3::new(1.0, 1.0, 1.0),
+        20f32.to_radians(),
+        (-30f32).to_radians(),
+        mirror,
+    );
 
 
     let objects_vec: Vec<&dyn RayIntersect> = vec![&cube,&cube2,&cube3];
