@@ -4,6 +4,7 @@
 
 use raylib::prelude::*;
 use std::f32::consts::PI;
+use rayon::prelude::*;
 
 mod framebuffer;
 mod ray_intersect;
@@ -25,7 +26,7 @@ use textures::TextureManager;
 fn intersects_any(
     origin: &Vector3,
     direction: &Vector3,
-    objects: &[&dyn RayIntersect],
+    objects: &[&(dyn RayIntersect + Sync)],
     max_dist: f32,
 ) -> bool {
     for obj in objects {
@@ -37,6 +38,7 @@ fn intersects_any(
     }
     false
 }
+
 
 fn reflect(i: &Vector3, n: &Vector3) -> Vector3 {
     *i - *n * 2.0 * i.dot(*n)
@@ -140,7 +142,7 @@ fn map_uv_for_cube(local_point: &Vector3, local_normal: &Vector3, half_size: &Ve
 pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
-    objects: &[&dyn RayIntersect],
+    objects: &[&(dyn RayIntersect + Sync)],
     light: &Light,
     depth: u32,
     texture_manager: &TextureManager,
@@ -249,40 +251,60 @@ fn procedural_sky(dir: Vector3) -> Vector3 {
 }
 
 // pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect]) {
-pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect], camera: &Camera, texture_manager: &TextureManager) {
-    let width = framebuffer.width as f32;
-    let height = framebuffer.height as f32;
+pub fn render(framebuffer: &mut Framebuffer, objects: &[&(dyn RayIntersect + Sync)], camera: &Camera, texture_manager: &TextureManager) {
+    // Preparar parámetros (no mutables)
+    let width_i = framebuffer.width;
+    let height_i = framebuffer.height;
+    let width = width_i as f32;
+    let height = height_i as f32;
     let aspect_ratio = width / height;
     let fov = PI / 3.0;
     let perspective_scale = (fov * 0.5).tan();
 
     let light = Light {
-                position: Vector3::new(2.0, 4.0, -2.0),
-                color: Vector3::new(1.0, 1.0, 1.0),
-                intensity: 1.0,
-            };
+        position: Vector3::new(2.0, 4.0, -2.0),
+        color: Vector3::new(1.0, 1.0, 1.0),
+        intensity: 1.0,
+    };
 
-    for y in 0..framebuffer.height {
-        for x in 0..framebuffer.width {
+    // Iterador paralelo: para cada fila (y) en paralelo, generamos una fila de píxeles
+    // Resultado: Vec<(x,y,Color)> con los colores calculados
+    let pixels: Vec<(i32, i32, Color)> = (0..height_i)
+    .into_par_iter()
+    .flat_map(|y| {
+        (0..width_i).into_par_iter().map(move |x| {
+            // calcula coordenadas de pantalla
             let screen_x = (2.0 * x as f32) / width - 1.0;
             let screen_y = -(2.0 * y as f32) / height + 1.0;
 
-            let screen_x = screen_x * aspect_ratio * perspective_scale;
-            let screen_y = screen_y * perspective_scale;
+            let sx = screen_x * aspect_ratio * perspective_scale;
+            let sy = screen_y * perspective_scale;
 
-            let ray_direction = Vector3::new(screen_x, screen_y, -1.0).normalized();
+            // construir rayo en espacio de cámara y transformarlo a world
+            let ray_direction = Vector3::new(sx, sy, -1.0).normalized();
             let rotated_direction = camera.basis_change(&ray_direction);
 
+            // calcular color (cast_ray es costoso; se ejecuta en paralelo)
             let ray_color = cast_ray(&camera.eye, &rotated_direction, objects, &light, 0, texture_manager);
+
+            // convertir a Color de raylib
             let pixel_color = Color::new(
                 (ray_color.x.clamp(0.0, 1.0) * 255.0) as u8,
                 (ray_color.y.clamp(0.0, 1.0) * 255.0) as u8,
                 (ray_color.z.clamp(0.0, 1.0) * 255.0) as u8,
                 255,
             );
-            framebuffer.set_current_color(pixel_color);
-            framebuffer.set_pixel(x, y);
-        }
+
+            (x, y, pixel_color)
+        })
+    })
+    .collect();
+
+    // Escribir los píxeles calculados al framebuffer (esto es secuencial)
+    // Esto evita mutaciones compartidas desde varios hilos.
+    for (x, y, color) in pixels {
+        framebuffer.set_current_color(color);
+        framebuffer.set_pixel(x, y);
     }
 }
 
@@ -379,10 +401,15 @@ fn main() {
         blackstone,
     );
 
-    let objects_vec: Vec<&dyn RayIntersect> = vec![&cube,&cube2,&cube3,&cube4];
-    let objects_slice: &[&dyn RayIntersect] = &objects_vec;
+    let objects_vec: Vec<&(dyn RayIntersect + Sync)> = vec![
+        &cube as &(dyn RayIntersect + Sync),
+        &cube2 as &(dyn RayIntersect + Sync),
+        &cube3 as &(dyn RayIntersect + Sync),
+        &cube4 as &(dyn RayIntersect + Sync),
+    ];
+    let objects_slice: &[&(dyn RayIntersect + Sync)] = &objects_vec;
 
-     let mut camera = Camera::new(
+    let mut camera = Camera::new(
         Vector3::new(0.0, 0.0, 10.0),  // eye
         Vector3::new(0.0, 0.0, 0.0),  // center
         Vector3::new(0.0, 1.0, 0.0),  // up
