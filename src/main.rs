@@ -138,7 +138,6 @@ fn map_uv_for_cube(local_point: &Vector3, local_normal: &Vector3, half_size: &Ve
 
 
 
-// firma actualizada: ahora recibe texture_manager: &TextureManager
 pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
@@ -262,7 +261,7 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[&(dyn RayIntersect + Syn
     let perspective_scale = (fov * 0.5).tan();
 
     let light = Light {
-        position: Vector3::new(2.0, 4.0, -2.0),
+        position: Vector3::new(2.5, 2.0, -5.0),
         color: Vector3::new(1.0, 1.0, 1.0),
         intensity: 1.0,
     };
@@ -322,19 +321,22 @@ fn main() {
     framebuffer.set_background_color(Color::new(201, 201, 201, 255));
 
     let mut texture_manager = TextureManager::new();
-    texture_manager.load_texture(&mut window, &raylib_thread, "assets/brick.png");
     texture_manager.load_texture(&mut window, &raylib_thread, "assets/blackstone.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/brick.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/glass.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/log_spruce.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/torch_on.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/water_flow.png");
 
 
-
-    let purple_matte = Material {
-        diffuse: Color::new(160, 110, 230, 255),
-        specular: 32.0,
-        reflectivity: 0.1,
-        transparency: 0.0,
-        refractive_index: 1.0,
-        albedo: [0.8, 0.2],
-        texture_path: Some("assets/brick.png".to_string())
+    let brick = Material {
+        diffuse: Color::new(180, 80, 60, 255),  
+        specular: 16.0,                         
+        reflectivity: 0.03,                    
+        transparency: 0.0,                      
+        refractive_index: 1.0,                 
+        albedo: [0.9, 0.1],                     
+        texture_path: Some("assets/brick.png".to_string()),
     };
 
     let blackstone = Material {
@@ -348,69 +350,118 @@ fn main() {
     };
 
 
-    let mirror = Material {
-        diffuse: Color::WHITE,
-        specular: 1000.0,
-        reflectivity: 1.0,
-        transparency: 0.0,
-        refractive_index: 1.0,
-        albedo: [0.0, 1.0],
-        texture_path: Some("algo".to_string())
-    };
+    // let mirror = Material {
+    //     diffuse: Color::WHITE,
+    //     specular: 1000.0,
+    //     reflectivity: 1.0,
+    //     transparency: 0.0,
+    //     refractive_index: 1.0,
+    //     albedo: [0.0, 1.0],
+    //     texture_path: Some("algo".to_string())
+    // };
 
     let glass = Material {
         diffuse: Color::WHITE,
-        specular: 125.0,
-        reflectivity: 0.1,
+        specular: 90.0,
+        reflectivity: 0.15,
         transparency: 0.9,
         refractive_index: 1.5,
-        albedo: [0.1, 0.9],
-        texture_path: Some("algo".to_string())
+        albedo: [0.05, 0.95],
+        texture_path: Some("assets/glass.png".to_string()),  
+    };
+
+
+    let wood = Material {
+        diffuse: Color::new(100, 70, 50, 255),  
+        specular: 8.0,                          
+        reflectivity: 0.02,                      
+        transparency: 0.0,                       
+        refractive_index: 1.0,                
+        albedo: [0.9, 0.1],                     
+        texture_path: Some("assets/log_spruce.png".to_string())
+    };
+
+    let water = Material {
+        diffuse: Color::new(60, 130, 200, 255),
+        specular: 80.0,                        
+        reflectivity: 0.08,                   
+        transparency: 0.75,                     
+        refractive_index: 1.333,                
+        albedo: [0.05, 0.95],                 
+        texture_path: Some("assets/water_flow.png".to_string()),
     };
 
 
     let cube = Cube::new(
-        Vector3::new(1.0, 0.0, -4.0),
-        Vector3::new(1.0, 4.0, 1.0),
-        20f32.to_radians(),
-        (-30f32).to_radians(),
-        purple_matte,
+        Vector3::new(0.0, 4.1, 0.0),
+        Vector3::new(4.0, 1.0, 4.0),
+        0f32.to_radians(),
+        (0f32).to_radians(),
+        brick,
     );
     
     let cube2 = Cube::new(
-        Vector3::new(2.0, -3.0, -5.0),
-        Vector3::new(1.0, 1.0, 1.0), // ejemplo: más alto
-        20f32.to_radians(),
-        (-30f32).to_radians(),
+        Vector3::new(0.0, 0.0, 4.0),
+        Vector3::new(4.0, 3.2, 0.5), 
+        0f32.to_radians(),
+        (0f32).to_radians(),
         glass,
     );
 
-    let cube3 = Cube::new(
-        Vector3::new(5.0, 2.0, -5.0),
-        Vector3::new(1.0, 1.0, 1.0),
-        20f32.to_radians(),
-        (-30f32).to_radians(),
-        mirror,
-    );
+    // let cube3 = Cube::new(
+    //     Vector3::new(5.0, 2.0, -5.0),
+    //     Vector3::new(1.0, 1.0, 1.0),
+    //     20f32.to_radians(),
+    //     (-30f32).to_radians(),
+    //     mirror,
+    // );
 
     let cube4 = Cube::new(
-        Vector3::new(2.5, 7.0, -5.0),
-        Vector3::new(5.0, 1.0, 5.0),
-        20f32.to_radians(),
-        (-30f32).to_radians(),
+        Vector3::new(0.0, -4.0, 0.0),
+        Vector3::new(4.0, 1.0, 4.0),
+        0f32.to_radians(),
+        (0f32).to_radians(),
         blackstone,
+    );
+
+    let water1 = Cube::new(
+        Vector3::new(3.0 ,  -2.5, -1.0),
+        Vector3::new(1.0, 0.5,3.8), 
+        0.0, 0.0,
+        water,
+    );
+
+
+    let cube5 = Cube::new(
+        Vector3::new(-5.0, 0.0, 0.0),
+        Vector3::new(1.0, 4.0, 4.0),
+        0f32.to_radians(),
+        (0f32).to_radians(),
+        wood.clone(),
+    );
+
+    let cube6 = Cube::new(
+        Vector3::new(5.0, 0.0, 0.0),
+        Vector3::new(1.0, 4.0, 4.0),
+        0f32.to_radians(),
+        (0f32).to_radians(),
+        wood.clone(),
     );
 
     let objects_vec: Vec<&(dyn RayIntersect + Sync)> = vec![
         &cube as &(dyn RayIntersect + Sync),
         &cube2 as &(dyn RayIntersect + Sync),
-        &cube3 as &(dyn RayIntersect + Sync),
+        // &cube3 as &(dyn RayIntersect + Sync),
         &cube4 as &(dyn RayIntersect + Sync),
+        &cube5 as &(dyn RayIntersect + Sync),
+        &cube6 as &(dyn RayIntersect + Sync),
+        &water1 as &(dyn RayIntersect + Sync),
+        
     ];
     let objects_slice: &[&(dyn RayIntersect + Sync)] = &objects_vec;
 
     let mut camera = Camera::new(
-        Vector3::new(0.0, 0.0, 10.0),  // eye
+        Vector3::new(0.0, 0.0, -10.0),  // eye
         Vector3::new(0.0, 0.0, 0.0),  // center
         Vector3::new(0.0, 1.0, 0.0),  // up
     );
