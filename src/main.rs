@@ -348,6 +348,7 @@ fn main() {
         .log_level(TraceLogLevel::LOG_WARNING)
         .build();
 
+    window.set_target_fps(60);
     let mut framebuffer = Framebuffer::new(window_width as i32, window_height as i32, Color::BLACK);
     framebuffer.set_background_color(Color::new(201, 201, 201, 255));
 
@@ -529,24 +530,43 @@ fn main() {
     );
     let rotation_speed = PI / 50.0;
 
-    while !window.window_should_close() {
-        framebuffer.clear();
+    let mut camera_moved = true;
 
+    while !window.window_should_close() {
+
+        // detectar entrada y mover cámara
         if window.is_key_down(KeyboardKey::KEY_LEFT) {
             camera.orbit(rotation_speed, 0.0);
+            camera_moved = true;
         }
         if window.is_key_down(KeyboardKey::KEY_RIGHT) {
             camera.orbit(-rotation_speed, 0.0);
+            camera_moved = true;
         }
         if window.is_key_down(KeyboardKey::KEY_UP) {
             camera.orbit(0.0, -rotation_speed);
+            camera_moved = true;
         }
         if window.is_key_down(KeyboardKey::KEY_DOWN) {
             camera.orbit(0.0, rotation_speed);
+            camera_moved = true;
         }
 
-        render(&mut framebuffer, objects_slice, &camera, &texture_manager);
+        // Si la cámara se movió, re-renderiza (pesado).
+        if camera_moved {
+            // render pinta en framebuffer.color_buffer / pixel_data y marca framebuffer.dirty via set_pixel o al final explicitamente
+            render(&mut framebuffer, objects_slice, &camera, &texture_manager);
+            // aseguramos que framebuffer se marque sucio (por si render no llamó a set_pixel internamente)
+            framebuffer.dirty = true;
+            camera_moved = false;
+        }
 
+        // dibujar FPS — simple y rápido: lo ponemos como overlay para que swap_buffers lo pinte.
+        let fps = window.get_fps();
+        let text = format!("FPS: {}", fps);
+        framebuffer.draw_text(&text, 8, 8, 20, Color::BLACK);
+
+        // swap_buffers dibuja la textura cacheada (rápido si dirty == false)
         framebuffer.swap_buffers(&mut window, &raylib_thread);
     }
 }
