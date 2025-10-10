@@ -5,6 +5,7 @@
 use raylib::prelude::*;
 use std::f32::consts::PI;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 mod framebuffer;
 mod ray_intersect;
@@ -142,7 +143,7 @@ pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
     objects: &[&(dyn RayIntersect + Sync)],
-    light: &Light,
+    lights: &[Light],
     depth: u32,
     texture_manager: &TextureManager,
 ) -> Vector3 {
@@ -150,6 +151,7 @@ pub fn cast_ray(
         return Vector3::new(0.1, 0.1, 0.2); // sky
     }
 
+    // Buscar el hit más cercano
     let mut closest_hit: Option<HitInfo> = None;
     for object in objects {
         if let Some(hit) = object.ray_intersect(ray_origin, ray_direction) {
@@ -160,61 +162,90 @@ pub fn cast_ray(
     }
 
     if let Some(hit) = closest_hit {
-        let light_dir = (light.position - hit.point).normalized();
-        let view_dir = (*ray_origin - hit.point).normalized();
         let m = hit.material;
 
-        // sombra
-        let shadow_origin: Vector3 = hit.point + hit.normal * 1e-3;
-        let in_shadow = intersects_any(&shadow_origin, &light_dir, objects, (light.position - hit.point).length() - 1e-3);
-        let shadow_intensity = if in_shadow { 0.8 } else { 0.0 };
-        let light_intensity = light.intensity * (1.0 - shadow_intensity);
-
-        // color base desde material
+        // color base desde material (y/o textura)
         let mut base_color = Vector3::new(
             m.diffuse.r as f32 / 255.0,
             m.diffuse.g as f32 / 255.0,
             m.diffuse.b as f32 / 255.0,
         );
 
-        // Si hay textura, usamos UV local (si existe) y sampleamos con texture_manager.sample_uv
         if let Some(texture_path) = &m.texture_path {
             if let Some((u_raw, v_raw)) = map_uv_for_cube(&hit.local_point, &hit.local_normal, &hit.local_half_size) {
-                // escalamos por la cantidad de repeticiones calculada para el objeto
                 let u_scaled = u_raw * hit.texture_repeat.x;
                 let v_scaled = v_raw * hit.texture_repeat.y;
                 base_color = texture_manager.sample_uv(texture_path, u_scaled, v_scaled);
             }
         }
 
-        let diffuse_intensity = hit.normal.dot(light_dir).max(0.0) * light_intensity;
-        let diffuse = base_color * diffuse_intensity;
+        // Ambient (luz suave general, evita que todo sea negro)
+        let ambient = Vector3::new(0.06, 0.06, 0.06);
 
-        // specular con la luz
-        let reflect_dir = reflect(&-light_dir, &-hit.normal).normalized();
-        let specular_intensity = view_dir.dot(reflect_dir).max(0.0).powf(m.specular) * light_intensity;
-        let specular = light.color * specular_intensity;
+        // acumuladores de iluminación
+        let mut total_diffuse = ambient * base_color; // start with ambient * base color
+        let mut total_specular = Vector3::zero();
 
-        // Reflection
+        // vista (dirección del ojo)
+        let view_dir = (*ray_origin - hit.point).normalized();
+
+        // recorrer todas las luces
+        for light in lights.iter() {
+            // vector hacia la luz y distancia
+            let mut lvec = light.position - hit.point;
+            let dist = lvec.length();
+            if dist <= 0.0 { continue; }
+            let light_dir = lvec / dist; // normalizado
+
+            // test de sombra: si hay algo entre el punto y la luz, atenua
+            let shadow_origin = hit.point + hit.normal * 5e-3; // mejor epsilon
+            let in_shadow = intersects_any(&shadow_origin, &light_dir, objects, dist - 1e-3);
+
+            // atenuación simple (ajustable)
+            // usa k pequeño para que la luz alcance más
+            let k = 0.02_f32;
+            let attenuation = light.intensity / (1.0 + k * dist * dist);
+
+            // si está en sombra: ponemos una fracción residual (para evitar negro absoluto)
+            let shadow_factor = if in_shadow { 0.15 } else { 1.0 };
+
+            // difuso (Lambert)
+            let ndotl = hit.normal.dot(light_dir).max(0.0);
+            total_diffuse += base_color * ndotl * attenuation * light.color * shadow_factor;
+
+            // especular (Blinn-Phong)
+            let half = (view_dir + light_dir).normalized();
+            let ndoth = hit.normal.dot(half).max(0.0);
+            let spec = ndoth.powf(m.specular);
+            total_specular += light.color * spec * attenuation * shadow_factor;
+        }
+
+        // Reflection recursiva
         let mut reflection_color = Vector3::new(0.1, 0.1, 0.2);
         if m.reflectivity > 0.0 {
             let rdir = reflect(ray_direction, &hit.normal).normalized();
             let rorigin = hit.point + hit.normal * 1e-3;
-            reflection_color = cast_ray(&rorigin, &rdir, objects, light, depth + 1, texture_manager);
+            reflection_color = cast_ray(&rorigin, &rdir, objects, lights, depth + 1, texture_manager);
         }
 
-        // Refraction
+        // Refraction recursiva
         let mut refraction_color = Vector3::zero();
         if m.transparency > 0.0 {
-            let refr = refract(ray_direction, &hit.normal, m.refractive_index).normalized();
+            let refr_dir = refract(ray_direction, &hit.normal, m.refractive_index);
+            let refr_dir = refr_dir.normalized();
             let rorigin = hit.point - hit.normal * 1e-3;
-            refraction_color = cast_ray(&rorigin, &refr, objects, light, depth + 1, texture_manager);
+            refraction_color = cast_ray(&rorigin, &refr_dir, objects, lights, depth + 1, texture_manager);
         }
 
-        let color = diffuse * m.albedo[0]
-            + specular * m.albedo[1]
+        // Emisión del material (si tiene)
+        let emitted = m.emissive * m.emission;
+
+        // Composición final (clamp implícito en conversión a color)
+        let color = total_diffuse * m.albedo[0]
+            + total_specular * m.albedo[1]
             + reflection_color * m.reflectivity
-            + refraction_color * m.transparency;
+            + refraction_color * m.transparency
+            + emitted;
 
         color
     } else {
@@ -249,9 +280,7 @@ fn procedural_sky(dir: Vector3) -> Vector3 {
     }
 }
 
-// pub fn render(framebuffer: &mut Framebuffer, objects: &[&dyn RayIntersect]) {
 pub fn render(framebuffer: &mut Framebuffer, objects: &[&(dyn RayIntersect + Sync)], camera: &Camera, texture_manager: &TextureManager) {
-    // Preparar parámetros (no mutables)
     let width_i = framebuffer.width;
     let height_i = framebuffer.height;
     let width = width_i as f32;
@@ -260,47 +289,49 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[&(dyn RayIntersect + Syn
     let fov = PI / 3.0;
     let perspective_scale = (fov * 0.5).tan();
 
-    let light = Light {
-        position: Vector3::new(2.5, 2.0, -5.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
-        intensity: 1.0,
-    };
+    let lights_vec = vec![
+        Light { // exterior / sol
+            position: Vector3::new(2.5, 5.0, -7.0),
+            color: Vector3::new(1.0, 1.0, 1.0),
+            intensity: 1.2,
+        },
+        Light { // antorcha: posición justo encima del bloque visible
+            position: Vector3::new(-3.0, -2.0, 2.0), 
+            color: Vector3::new(1.0, 0.72, 0.35),
+            intensity: 6.0,
+        },
+    ];
 
-    // Iterador paralelo: para cada fila (y) en paralelo, generamos una fila de píxeles
-    // Resultado: Vec<(x,y,Color)> con los colores calculados
+    let lights_arc = Arc::new(lights_vec);
+
+    // Iterador paralelo: para cada fila (y) en paralelo
     let pixels: Vec<(i32, i32, Color)> = (0..height_i)
-    .into_par_iter()
-    .flat_map(|y| {
-        (0..width_i).into_par_iter().map(move |x| {
-            // calcula coordenadas de pantalla
-            let screen_x = (2.0 * x as f32) / width - 1.0;
-            let screen_y = -(2.0 * y as f32) / height + 1.0;
+        .into_par_iter()
+        .flat_map(|y| {
+            let lights_for_row = lights_arc.clone();
+            (0..width_i).into_par_iter().map(move |x| {
+                let screen_x = (2.0 * x as f32) / width - 1.0;
+                let screen_y = -(2.0 * y as f32) / height + 1.0;
+                let sx = screen_x * aspect_ratio * perspective_scale;
+                let sy = screen_y * perspective_scale;
+                let ray_direction = Vector3::new(sx, sy, -1.0).normalized();
+                let rotated_direction = camera.basis_change(&ray_direction);
 
-            let sx = screen_x * aspect_ratio * perspective_scale;
-            let sy = screen_y * perspective_scale;
+                // calculamos color pasando todas las luces (slice desde Arc)
+                let ray_color = cast_ray(&camera.eye, &rotated_direction, objects, &*lights_for_row, 0, texture_manager);
 
-            // construir rayo en espacio de cámara y transformarlo a world
-            let ray_direction = Vector3::new(sx, sy, -1.0).normalized();
-            let rotated_direction = camera.basis_change(&ray_direction);
+                let pixel_color = Color::new(
+                    (ray_color.x.clamp(0.0, 1.0) * 255.0) as u8,
+                    (ray_color.y.clamp(0.0, 1.0) * 255.0) as u8,
+                    (ray_color.z.clamp(0.0, 1.0) * 255.0) as u8,
+                    255,
+                );
 
-            // calcular color (cast_ray es costoso; se ejecuta en paralelo)
-            let ray_color = cast_ray(&camera.eye, &rotated_direction, objects, &light, 0, texture_manager);
-
-            // convertir a Color de raylib
-            let pixel_color = Color::new(
-                (ray_color.x.clamp(0.0, 1.0) * 255.0) as u8,
-                (ray_color.y.clamp(0.0, 1.0) * 255.0) as u8,
-                (ray_color.z.clamp(0.0, 1.0) * 255.0) as u8,
-                255,
-            );
-
-            (x, y, pixel_color)
+                (x, y, pixel_color)
+            })
         })
-    })
-    .collect();
+        .collect();
 
-    // Escribir los píxeles calculados al framebuffer (esto es secuencial)
-    // Esto evita mutaciones compartidas desde varios hilos.
     for (x, y, color) in pixels {
         framebuffer.set_current_color(color);
         framebuffer.set_pixel(x, y);
@@ -325,7 +356,7 @@ fn main() {
     texture_manager.load_texture(&mut window, &raylib_thread, "assets/brick.png");
     texture_manager.load_texture(&mut window, &raylib_thread, "assets/glass.png");
     texture_manager.load_texture(&mut window, &raylib_thread, "assets/log_spruce.png");
-    texture_manager.load_texture(&mut window, &raylib_thread, "assets/torch_on.png");
+    texture_manager.load_texture(&mut window, &raylib_thread, "assets/glowstone.png");
     texture_manager.load_texture(&mut window, &raylib_thread, "assets/water_flow.png");
 
 
@@ -337,6 +368,8 @@ fn main() {
         refractive_index: 1.0,                 
         albedo: [0.9, 0.1],                     
         texture_path: Some("assets/brick.png".to_string()),
+        emissive:Vector3::zero(),
+        emission:0.0
     };
 
     let blackstone = Material {
@@ -346,7 +379,9 @@ fn main() {
         transparency: 0.0,
         refractive_index: 1.0,
         albedo: [0.8, 0.2],
-        texture_path: Some("assets/blackstone.png".to_string())
+        texture_path: Some("assets/blackstone.png".to_string()),
+        emissive:Vector3::zero(),
+        emission:0.0
     };
 
 
@@ -368,6 +403,8 @@ fn main() {
         refractive_index: 1.5,
         albedo: [0.05, 0.95],
         texture_path: Some("assets/glass.png".to_string()),  
+        emissive:Vector3::zero(),
+        emission:0.0
     };
 
 
@@ -378,7 +415,9 @@ fn main() {
         transparency: 0.0,                       
         refractive_index: 1.0,                
         albedo: [0.9, 0.1],                     
-        texture_path: Some("assets/log_spruce.png".to_string())
+        texture_path: Some("assets/log_spruce.png".to_string()),
+        emissive:Vector3::zero(),
+        emission:0.0
     };
 
     let water = Material {
@@ -389,7 +428,22 @@ fn main() {
         refractive_index: 1.333,                
         albedo: [0.05, 0.95],                 
         texture_path: Some("assets/water_flow.png".to_string()),
+        emissive:Vector3::zero(),
+        emission:0.0
     };
+
+    let glowstone = Material {
+        diffuse: Color::WHITE,
+        specular: 12.0,
+        reflectivity: 0.0,
+        transparency: 0.0,
+        refractive_index: 1.0,
+        albedo: [0.6, 0.4],
+        texture_path: Some("assets/glowstone.png".to_string()),
+        emissive: Vector3::new(1.0, 0.6, 0.2),
+        emission: 1.5,
+    };
+
 
 
     let cube = Cube::new(
@@ -447,6 +501,14 @@ fn main() {
         (0f32).to_radians(),
         wood.clone(),
     );
+ 
+    let torch_obj = Cube::new(
+        Vector3::new(-3.0, -2.2, 2.0),
+        Vector3::new(0.8, 0.8,0.8),
+        0.0, 
+        0.0,
+        glowstone,
+    );
 
     let objects_vec: Vec<&(dyn RayIntersect + Sync)> = vec![
         &cube as &(dyn RayIntersect + Sync),
@@ -456,12 +518,12 @@ fn main() {
         &cube5 as &(dyn RayIntersect + Sync),
         &cube6 as &(dyn RayIntersect + Sync),
         &water1 as &(dyn RayIntersect + Sync),
-        
+        &torch_obj as &(dyn RayIntersect + Sync),
     ];
     let objects_slice: &[&(dyn RayIntersect + Sync)] = &objects_vec;
 
     let mut camera = Camera::new(
-        Vector3::new(0.0, 0.0, -10.0),  // eye
+        Vector3::new(0.0, 0.0, -15.0),  // eye
         Vector3::new(0.0, 0.0, 0.0),  // center
         Vector3::new(0.0, 1.0, 0.0),  // up
     );

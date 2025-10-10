@@ -9,4 +9,6 @@ pub struct Material {
     pub refractive_index: f32,
     pub albedo: [f32; 2],
     pub texture_path: Option<String>,
+    pub emissive: Vector3,
+    pub emission: f32
 }
