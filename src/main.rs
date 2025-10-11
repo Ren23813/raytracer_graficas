@@ -291,9 +291,9 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[&(dyn RayIntersect + Syn
 
     let lights_vec = vec![
         Light { // exterior / sol
-            position: Vector3::new(2.5, 5.0, -7.0),
+            position: Vector3::new(2.5, 6.0, -7.5),
             color: Vector3::new(1.0, 1.0, 1.0),
-            intensity: 1.2,
+            intensity: 4.5,
         },
         Light { // antorcha: posición justo encima del bloque visible
             position: Vector3::new(-3.0, -2.0, 2.0), 
