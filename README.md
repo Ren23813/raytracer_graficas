@@ -15,5 +15,6 @@
 #### Se recomienda **encarecidamente** utilizar una computadora de escritorio o, en su defecto, una laptop conectada a corriente, para la mejor ejecución de este raytracer. Consume bastantes recursos, a pesar de que utiliza hilos para intentar mitigar dicha carga.  
 
 Video: <video controls src="raytracer.mp4" title="Title"></video>
+(tal parece no sé cargar un video en markdown... Está en el .mp4 al mismo nivel que este readme :D)
 
 Hecho con ayuda de ChatGPT (OpenAI; 10, 2025)
